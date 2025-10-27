@@ -1,0 +1,22 @@
+# Configurações do Pipeline ETL Mercado Libre
+
+meli:
+  site_id: "MLA"  # Argentina
+  category_id: "MLA1051"  # Categoria de celulares
+  search_query: "Samsung Galaxy S25"
+  limit_per_page: 200
+  max_products: 1000
+
+bigquery:
+  project_id: "meli-etl"
+  dataset_id: "mercado_libre"
+  table_id: "products_samsung_s25"
+  location: "US"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+pipeline:
+  retry_attempts: 3
+  retry_delay_seconds: 60
