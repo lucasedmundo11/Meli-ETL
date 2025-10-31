@@ -425,9 +425,9 @@ Este projeto está licenciado sob a **MIT License** - veja o arquivo [LICENSE](L
 ## 👨‍� Autor
 
 **Lucas Edmundo**  
-📧 Email: [lucas.edmundo@exemplo.com](mailto:lucas.edmundo@exemplo.com)  
+📧 Email: [lucasedmundo11@gmail.com](mailto:lucasedmundo11@gmail.com)  
 🐙 GitHub: [@lucasedmundo11](https://github.com/lucasedmundo11)  
-💼 LinkedIn: [Lucas Edmundo](https://linkedin.com/in/lucas-edmundo)
+💼 LinkedIn: [Lucas Edmundo](https://www.linkedin.com/in/lucas-edmundo11/)
 
 ## 📚 Referências e Recursos
 
