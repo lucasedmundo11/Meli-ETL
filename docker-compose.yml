@@ -1,0 +1,67 @@
+version: "3.8"
+
+services:
+  meli-etl:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: meli-etl-pipeline:latest
+    container_name: meli-etl-container
+
+    environment:
+      # Google Cloud Platform
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID:-meli-etl-476805}
+      - BQ_DATASET_ID=${BQ_DATASET_ID:-mercado_libre}
+      - BQ_TABLE_ID=${BQ_TABLE_ID:-products_samsung_s25}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/config/service-account.json
+
+      # Apify
+      - APIFY_TOKEN=${APIFY_TOKEN}
+
+      # Pipeline settings
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MAX_RETRY_ATTEMPTS=${MAX_RETRY_ATTEMPTS:-3}
+      - RETRY_DELAY_SECONDS=${RETRY_DELAY_SECONDS:-60}
+
+    volumes:
+      # Mount service account key (read-only)
+      - ./config/service-account.json:/app/config/service-account.json:ro
+
+      # Mount logs directory for persistence
+      - ./logs:/app/logs
+
+      # Mount config for easy updates
+      - ./config/config.yaml:/app/config/config.yaml:ro
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+          cpus: "0.25"
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Add a monitoring service (Prometheus/Grafana)
+  # monitoring:
+  #   image: prom/prometheus:latest
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+networks:
+  default:
+    name: meli-etl-network

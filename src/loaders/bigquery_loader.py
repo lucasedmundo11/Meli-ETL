@@ -1,122 +1,138 @@
 import logging
-from typing import List, Dict
+from typing import List, Dict, Any
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
-import json
+from datetime import datetime, date, time
+import decimal
 
 class BigQueryLoader:
-    """Carregador de dados para o BigQuery."""
-    
+    """Carregador de dados para o BigQuery (schema atualizado para o output do Apify)."""
+
     def __init__(self, project_id: str, dataset_id: str, table_id: str):
-        """
-        Inicializa o loader do BigQuery.
-        
-        Args:
-            project_id: ID do projeto GCP
-            dataset_id: ID do dataset
-            table_id: ID da tabela
-        """
         self.project_id = project_id
         self.dataset_id = dataset_id
         self.table_id = table_id
         self.client = bigquery.Client(project=project_id)
         self.logger = logging.getLogger(__name__)
-        
+
     def create_table_if_not_exists(self):
-        """Cria a tabela se ela não existir."""
         table_ref = self.client.dataset(self.dataset_id).table(self.table_id)
-        
         try:
             self.client.get_table(table_ref)
             self.logger.info(f"Tabela {self.table_id} já existe")
         except NotFound:
             schema = self._get_table_schema()
             table = bigquery.Table(table_ref, schema=schema)
-            
-            # Configurar particionamento por JOB_RUN
+            # particionamento por JOB_RUN
             table.time_partitioning = bigquery.TimePartitioning(
                 type_=bigquery.TimePartitioningType.DAY,
                 field="JOB_RUN"
             )
-            
-            # Configurar clustering
-            table.clustering_fields = ["brand", "condition", "seller_power_seller_status"]
-            
+            # clustering sugerido
+            table.clustering_fields = ["seller", "condition", "currency"]
             table = self.client.create_table(table)
-            self.logger.info(f"Tabela {self.table_id} criada com sucesso")
-    
-    def load_data(self, products: List[Dict]) -> int:
-        """
-        Carrega dados no BigQuery.
-        
-        Args:
-            products: Lista de produtos transformados
-            
-        Returns:
-            Número de linhas inseridas
-        """
+            self.logger.info(f"Tabela {self.table_id} criada com sucesso (particionada por JOB_RUN)")
+
+    def load_data(self, products: List[Dict[str, Any]]) -> int:
         if not products:
             self.logger.info("Nenhum produto para carregar")
             return 0
-        
+
+        # Serializar valores não-JSON-serializáveis (ex.: datetime)
+        json_rows = [self._serialize_item(p) for p in products]
+
         table_ref = self.client.dataset(self.dataset_id).table(self.table_id)
-        
-        # Configuração do job de carga
         job_config = bigquery.LoadJobConfig(
             write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
             source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
-            autodetect=False,
-            schema=self._get_table_schema()
+            schema=self._get_table_schema(),
+            autodetect=False
         )
-        
+
         try:
-            job = self.client.load_table_from_json(
-                products, table_ref, job_config=job_config
-            )
-            job.result()  # Aguarda conclusão
-            
+            job = self.client.load_table_from_json(json_rows, table_ref, job_config=job_config)
+            job.result()
             self.logger.info(f"Carregados {len(products)} produtos no BigQuery")
-            self.logger.info(f"JOB_RUN timestamp: {products[0]['JOB_RUN']}")
             return len(products)
-            
         except Exception as e:
-            self.logger.error(f"Erro ao carregar dados no BigQuery: {e}")
+            self.logger.exception(f"Erro ao carregar no BigQuery: {e}")
             raise
-    
-    def _get_table_schema(self) -> List[bigquery.SchemaField]:
-        """Define o schema da tabela."""
+
+    def _serialize_item(self, item: Any) -> Any:
+        """
+        Converte recursivamente o item para tipos JSON serializáveis.
+        - datetime/date/time -> ISO 8601 string (Z se naive)
+        - decimal.Decimal -> float (ou string se preferir)
+        - bytes -> decode utf-8
+        - outros tipos compostos (list/dict/tuple) -> recursivo
+        """
+        if item is None:
+            return None
+
+        # Primitivos seguros
+        if isinstance(item, (str, int, float, bool)):
+            return item
+
+        # datetime-like
+        if isinstance(item, datetime):
+            if item.tzinfo is None:
+                return item.isoformat() + "Z"
+            return item.isoformat()
+
+        if isinstance(item, date) and not isinstance(item, datetime):
+            # date -> iso date
+            return item.isoformat()
+
+        if isinstance(item, time):
+            return item.isoformat()
+
+        if isinstance(item, decimal.Decimal):
+            # converter Decimal para float pode perder precisão, ajustar se precisar
+            try:
+                return float(item)
+            except Exception:
+                return str(item)
+
+        # iteráveis
+        if isinstance(item, (list, tuple, set)):
+            return [self._serialize_item(v) for v in item]
+
+        if isinstance(item, dict):
+            out = {}
+            for k, v in item.items():
+                # BigQuery campo names devem ser strings; manter chaves como estão
+                out[k] = self._serialize_item(v)
+            return out
+
+        # bytes
+        if isinstance(item, (bytes, bytearray)):
+            try:
+                return item.decode("utf-8")
+            except Exception:
+                return str(item)
+
+        # Fallback: string representation
+        return str(item)
+
+    def _get_table_schema(self):
+        # Schema alinhado ao output do Apify
         return [
             bigquery.SchemaField("product_id", "STRING", mode="REQUIRED"),
             bigquery.SchemaField("title", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("subtitle", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("originalPrice", "STRING", mode="NULLABLE"),
             bigquery.SchemaField("price", "FLOAT", mode="NULLABLE"),
-            bigquery.SchemaField("currency_id", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("price_string", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("alternativePrice", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("rating", "FLOAT", mode="NULLABLE"),
+            bigquery.SchemaField("reviews", "INT64", mode="NULLABLE"),
             bigquery.SchemaField("condition", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("category_id", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("thumbnail_url", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("permalink", "STRING", mode="NULLABLE"),
-            
-            # Seller fields
-            bigquery.SchemaField("seller_id", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("seller_nickname", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("seller_reputation", "JSON", mode="NULLABLE"),
-            bigquery.SchemaField("seller_power_seller_status", "STRING", mode="NULLABLE"),
-            
-            # Location fields
-            bigquery.SchemaField("city", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("state", "STRING", mode="NULLABLE"),
-            
-            # Product details
-            bigquery.SchemaField("attributes", "JSON", mode="NULLABLE"),
-            bigquery.SchemaField("pictures", "JSON", mode="NULLABLE"),
-            bigquery.SchemaField("warranty", "STRING", mode="NULLABLE"),
-            
-            # Technical specs
-            bigquery.SchemaField("brand", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("model", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("memory", "STRING", mode="NULLABLE"),
-            bigquery.SchemaField("color", "STRING", mode="NULLABLE"),
-            
-            # Metadata
+            bigquery.SchemaField("seller", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("description", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("images", "STRING", mode="REPEATED"),
+            bigquery.SchemaField("sellCount", "INT64", mode="NULLABLE"),
+            bigquery.SchemaField("url", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("currency", "STRING", mode="NULLABLE"),
             bigquery.SchemaField("extraction_date", "TIMESTAMP", mode="REQUIRED"),
-            bigquery.SchemaField("JOB_RUN", "TIMESTAMP", mode="REQUIRED"),  # Campo renomeado
+            bigquery.SchemaField("JOB_RUN", "TIMESTAMP", mode="REQUIRED"),
         ]
